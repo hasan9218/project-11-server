@@ -3,6 +3,7 @@ const express = require('express')
 const cors = require('cors')
 require('dotenv').config()
 const { MongoClient, ServerApiVersion } = require('mongodb')
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 const admin = require('firebase-admin')
 const port = process.env.PORT || 3000
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
@@ -40,7 +41,7 @@ const verifyJWT = async (req, res, next) => {
   }
 }
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+// Create a MongoClient 
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -56,31 +57,45 @@ async function run() {
     // add lesson
     app.post('/lessons', async (req, res) => {
       const lessonData = req.body;
-      // console.log(lessonData);
 
       const result = await lessonsCollection.insertOne(lessonData)
       res.send(result);
     })
-    // All lesson:
-    // get all lessons from db
+    
+    // get lessons from db
     app.get('/lessons', async (req, res) => {
       const result = await lessonsCollection.find().toArray();
       res.send(result);
     })
 
+ // my-lessons
+    app.get('/my-lessons/:email', async (req, res) => {
+      const email = req.params.email;
+      // authorEmail:"user@b.com"
+      const query = { authorEmail: email };
+
+      const result = await lessonsCollection.find(query).toArray();
+      res.send(result);
+    })
+
+ // delete my lesson
+    app.delete('/my-lesson/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+
+      const result = await lessonsCollection.deleteOne(query);
+      res.send(result)
+    })
 
 
 
-
-
-
-    // Send a ping to confirm a successful connection
+    // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
       'Pinged your deployment. You successfully connected to MongoDB!'
     )
   } finally {
-    // Ensures that the client will close when you finish/error
+    
   }
 }
 run().catch(console.dir)
