@@ -1,4 +1,3 @@
-
 const express = require('express')
 const cors = require('cors')
 require('dotenv').config()
@@ -53,6 +52,7 @@ async function run() {
   try {
     const db = client.db('lessonsDB')
     const lessonsCollection = db.collection('lessons')
+    const usersCollection = db.collection('users')
 
     // add lesson
     app.post('/lessons', async (req, res) => {
@@ -113,6 +113,42 @@ async function run() {
       res.send(result)
     })
 
+
+    // ---------------------------------------------
+    // Manage-users role: save or update user in db
+    app.post('/user', async (req, res) => {
+      const userData = req.body;
+      // add some extra info
+      userData.isPremium= false;
+      userData.lessonCount=0;
+      userData.created_at = new Date().toISOString();
+      userData.last_loggedIn = new Date().toISOString();
+      userData.role = 'user'
+
+      const query = { email: userData?.email };
+
+      //find if the user already exist or not
+      const alreadyExists = await usersCollection.findOne(query);
+      console.log('user already exist--> ', !!alreadyExists)
+
+      // if exist--> update
+      if (alreadyExists) {
+        console.log('updating user info-->')
+        const update = {
+          $set: {
+            last_loggedIn: new Date().toISOString
+          }
+        }
+        const result = await usersCollection.updateOne(query, update)
+
+        return res.send(result)
+      }
+
+      // if user does'nt exist -->save 
+      console.log('saving user info ....')
+      const result = await usersCollection.insertOne(userData);
+      res.send(result);
+    })
 
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
