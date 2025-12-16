@@ -167,6 +167,16 @@ async function run() {
       const result = await usersCollection.deleteOne(query);
       res.send(result)
     })
+    // update role: manage user
+    app.patch('/update-role', verifyJWT, async (req, res) => {
+      const { email, role } = req.body;
+      const update = {
+        $set: { role }
+      }
+      // update role in the user collection
+      const result = await usersCollection.updateOne({ email }, update)
+      res.send(result)
+    })
     
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
