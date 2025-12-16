@@ -86,7 +86,32 @@ async function run() {
       const result = await lessonsCollection.deleteOne(query);
       res.send(result)
     })
+    // update my lesson
+    app.patch('/my-lesson/:id', async (req, res) => {
+      const { title, description, category, emotionalTone, privacy, accessLevel, image } = req.body;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
 
+      const update = {
+        $set: {
+          title: title,
+          description: description,
+          category: category,
+          emotionalTone: emotionalTone,
+          privacy: privacy,
+          accessLevel: accessLevel,
+          last_update_at: new Date()
+        }
+      }
+      // if image exist
+      if (req.body.image) {
+        update.$set.image = req.body.image;
+      }
+
+
+      const result = await lessonsCollection.updateOne(query, update)
+      res.send(result)
+    })
 
 
     // Send a ping 
