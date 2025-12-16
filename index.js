@@ -150,6 +150,15 @@ async function run() {
       res.send(result);
     })
 
+ // Manage user: get all user's for admin
+    app.get('/users', verifyJWT, async (req, res) => {
+      // admin email
+      const adminEmail = req.tokenEmail;
+      // give all user except admin
+      const result = await usersCollection.find({ email: { $ne: adminEmail } }).toArray();
+      res.send(result);
+    })
+
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
