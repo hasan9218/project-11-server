@@ -40,6 +40,7 @@ const verifyJWT = async (req, res, next) => {
   }
 }
 
+
 // Create a MongoClient 
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: {
@@ -57,6 +58,19 @@ async function run() {
     // add lesson
     app.post('/lessons', async (req, res) => {
       const lessonData = req.body;
+
+       // get author's lesson count
+      const user = await usersCollection.findOne(
+        { email: lessonData.authorEmail },
+        { projection: { lessonCount: 1 } }
+      );
+      const currentCount = user?.lessonCount || 0;
+      lessonData.authorLessonCount = currentCount + 1;
+
+      // update lesson count in the userCollection
+      const userQuery = { email: lessonData.authorEmail };
+      const update = { $inc: { lessonCount: 1 } };
+      await usersCollection.updateOne(userQuery, update);
 
       const result = await lessonsCollection.insertOne(lessonData)
       res.send(result);
@@ -193,6 +207,42 @@ async function run() {
         isPremium: result?.isPremium
       })
     })
+
+       // Author 
+    //  Get author info
+    app.get('/author/:email', async (req, res) => {
+      const { email } = req.params;
+
+      const author = await usersCollection.findOne(
+        { email },
+        { projection: { password: 0, _id: 0 } }
+      );
+
+      if (!author) {
+        return res.status(404).send({});
+      }
+
+      res.send({
+        name: author.name || author.displayName, // support both
+        email: author.email,
+        photoURL: author.image || author.photoURL, // FIXED
+        isPremium: author.isPremium || false
+      });
+    });
+
+
+
+    //  author's public lessons
+    app.get('/lessons/author/:email', async (req, res) => {
+      const { email } = req.params;
+
+      const lessons = await lessonsCollection.find({
+        authorEmail: email,
+        privacy: "public"
+      }).toArray();
+
+      res.send(lessons);
+    });
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
