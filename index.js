@@ -39,8 +39,6 @@ const verifyJWT = async (req, res, next) => {
     return res.status(401).send({ message: 'Unauthorized Access!', err })
   }
 }
-
-
 // Create a MongoClient 
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: {
@@ -54,12 +52,14 @@ async function run() {
     const db = client.db('lessonsDB')
     const lessonsCollection = db.collection('lessons')
     const usersCollection = db.collection('users')
+    const favoritesCollection = db.collection('favorites')
 
     // add lesson
     app.post('/lessons', async (req, res) => {
       const lessonData = req.body;
+      lessonData.likes = [];
 
-       // get author's lesson count
+      // get author's lesson count
       const user = await usersCollection.findOne(
         { email: lessonData.authorEmail },
         { projection: { lessonCount: 1 } }
@@ -75,20 +75,61 @@ async function run() {
       const result = await lessonsCollection.insertOne(lessonData)
       res.send(result);
     })
-    
+
     // get lessons from db
     app.get('/lessons', async (req, res) => {
       const result = await lessonsCollection.find().toArray();
       res.send(result);
     })
-//Lesson details:  get a single lesson from db
+    //Lesson details:  get a single lesson from db
     app.get('/lesson-details/:id', async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
       const result = await lessonsCollection.findOne(query);
       res.send(result);
     })
- // my-lessons
+    // Lesson details: like
+    app.post('/lesson/:id/like', verifyJWT, async (req, res) => {
+      const Id = req.params.id;
+      const userEmail = req.body.userId;
+
+      const lesson = await lessonsCollection.findOne({ _id: new ObjectId(id) });
+
+      // Check if already liked
+      const alreadyLiked = lesson.likes.includes(userEmail);
+
+      if (alreadyLiked) {
+        await lessonsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $pull: { likes: userEmail },
+            $inc: { likesCount: -1 }
+          }
+        );
+      }
+      else {
+        await lessonsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $push: { likes: userEmail },
+            $inc: { likesCount: 1 }
+          }
+        );
+      }
+
+      // Get updated count
+      const updatedLesson = await lessonsCollection.findOne(
+        { _id: new ObjectId(id) },
+        { projection: { likesCount: 1, likes: 1 } }
+      );
+
+      res.send({
+        success: true,
+        likesCount: updatedLesson.likesCount,
+        userLiked: !alreadyLiked
+      });
+    });
+    // my-lessons
     app.get('/my-lessons/:email', async (req, res) => {
       const email = req.params.email;
       // authorEmail:"user@b.com"
@@ -98,7 +139,7 @@ async function run() {
       res.send(result);
     })
 
- // delete my lesson
+    // delete my lesson
     app.delete('/my-lesson/:id', async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
@@ -136,7 +177,7 @@ async function run() {
 
     // ---------------------------------------------
     // Manage-users role: save or update user in db
-    app.post('/user', async (req, res) => {
+    app.post('/user',verifyJWT, async (req, res) => {
       const userData = req.body;
       // add some extra info
       userData.isPremium = false;
@@ -149,7 +190,7 @@ async function run() {
 
       //find if the user already exist or not
       const alreadyExists = await usersCollection.findOne(query);
-      
+
 
       // if exist--> update
       if (alreadyExists) {
@@ -170,7 +211,7 @@ async function run() {
       res.send(result);
     })
 
- // Manage user: get all user's for admin
+    // Manage user: get all user's for admin
     app.get('/users', verifyJWT, async (req, res) => {
       // admin email
       const adminEmail = req.tokenEmail;
@@ -179,7 +220,7 @@ async function run() {
       res.send(result);
     })
 
-        // delete user: manage user
+    // delete user: manage user
     app.delete('/users/:email', async (req, res) => {
       const email = req.params.email;
       const query = { email }
@@ -208,7 +249,7 @@ async function run() {
       })
     })
 
-       // Author 
+    // Author 
     //  Get author info
     app.get('/author/:email', async (req, res) => {
       const { email } = req.params;
@@ -229,9 +270,6 @@ async function run() {
         isPremium: author.isPremium || false
       });
     });
-
-
-
     //  author's public lessons
     app.get('/lessons/author/:email', async (req, res) => {
       const { email } = req.params;
@@ -243,13 +281,22 @@ async function run() {
 
       res.send(lessons);
     });
+
+    // --------------------------------------------------------------------
+    // favorites
+    app.post('/favorites', async(req,res)=>{
+      const favoritesData=req.body;
+      console.log(favoritesData)
+      const result=await favoritesCollection.insertOne(favoritesData)
+      res.send(result);
+    })
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
       'Pinged your deployment. You successfully connected to MongoDB!'
     )
   } finally {
-    
+
   }
 }
 run().catch(console.dir)
