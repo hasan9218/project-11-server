@@ -91,7 +91,7 @@ async function run() {
     // Lesson details: like
     app.post('/lesson/:id/like', verifyJWT, async (req, res) => {
       const Id = req.params.id;
-      const userEmail = req.body.userId;
+      const userEmail = req.body.userEmail;
 
       const lesson = await lessonsCollection.findOne({ _id: new ObjectId(id) });
 
@@ -177,7 +177,7 @@ async function run() {
 
     // ---------------------------------------------
     // Manage-users role: save or update user in db
-    app.post('/user',verifyJWT, async (req, res) => {
+    app.post('/user', verifyJWT, async (req, res) => {
       const userData = req.body;
       // add some extra info
       userData.isPremium = false;
@@ -284,12 +284,58 @@ async function run() {
 
     // --------------------------------------------------------------------
     // favorites
-    app.post('/favorites', async(req,res)=>{
-      const favoritesData=req.body;
-      console.log(favoritesData)
-      const result=await favoritesCollection.insertOne(favoritesData)
-      res.send(result);
-    })
+    app.post('/lesson/:id/favorite', verifyJWT, async (req, res) => {
+
+      const { lessonId, userEmail, title, accessLevel, category, emotionalTone } = req.body;
+
+      // check if already saved 
+      const existing = await favoritesCollection.findOne({
+        lessonId: lessonId,
+        userEmail: userEmail
+      });
+
+      // if exist,delete
+      if (existing) {
+        await favoritesCollection.deleteOne({
+          lessonId: lessonId,
+          userEmail: userEmail
+        });
+
+        await lessonsCollection.updateOne(
+          { _id: new ObjectId(lessonId) },
+          { $inc: { favoritesCount: -1 } }
+        );
+      } 
+      else {
+        // if not,add
+        await favoritesCollection.insertOne({
+          lessonId: lessonId,
+          userEmail: userEmail,
+          title:title, 
+          accessLevel:accessLevel, 
+          category:category, 
+          emotionalTone:emotionalTone,
+          saved_at: new Date().toISOString()
+        });
+
+        await lessonsCollection.updateOne(
+          { _id: new ObjectId(lessonId) },
+          { $inc: { favoritesCount: 1 } }
+        );
+      }
+      const updatedLesson = await lessonsCollection.findOne(
+        { _id: new ObjectId(lessonId) },
+        { projection: { favoritesCount: 1 } }
+      );
+
+      const favoritesCount = updatedLesson.favoritesCount || 0;
+
+      res.send({
+        success: true,
+        favoritesCount: favoritesCount,
+        userFavorited: !existing 
+      });
+    });
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
@@ -302,7 +348,7 @@ async function run() {
 run().catch(console.dir)
 
 app.get('/', (req, res) => {
-  res.send('WisdomCell Server is Running....')
+  res.send('WisdomCell Server is Run')
 })
 
 app.listen(port, () => {
