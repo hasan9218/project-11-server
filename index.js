@@ -338,7 +338,7 @@ async function run() {
       });
     });
     // my favorites
-    app.get('/favorites/:email', async (req, res) => {
+    app.get('/favorites/:email',verifyJWT, async (req, res) => {
       const email = req.params.email;
       const query = { userEmail: email };
 
@@ -347,7 +347,7 @@ async function run() {
     })
 
     // delete my fav
-    app.delete('/my-favorites/:id', async (req, res) => {
+    app.delete('/my-favorites/:id',verifyJWT, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
       
@@ -367,6 +367,20 @@ async function run() {
         { $inc: { favoritesCount: -1 } }
       );
 
+      res.send(result)
+    })
+    // comments
+    app.post('/comments', async(req,res)=>{
+      const commentData=req.body;
+
+      const result= await commentsCollection.insertOne(commentData);
+      res.send(result);
+    })
+     app.get('/comments/:id',async(req,res)=>{
+      const id=req.params.id;
+      const query={lessonId: id}
+
+      const result= await commentsCollection.find(query).toArray();
       res.send(result)
     })
     // Send a ping 
