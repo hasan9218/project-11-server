@@ -2,6 +2,8 @@ const express = require('express')
 const cors = require('cors')
 require('dotenv').config()
 const { MongoClient, ServerApiVersion } = require('mongodb')
+//const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 const admin = require('firebase-admin')
 const port = process.env.PORT || 3000
@@ -17,7 +19,7 @@ const app = express()
 // middleware
 app.use(
   cors({
-    origin: [[process.env.CLIENT_DOMAIN]],
+    origin: process.env.CLIENT_DOMAIN,
     credentials: true,
     optionSuccessStatus: 200,
   })
@@ -131,6 +133,31 @@ async function run() {
         userLiked: !alreadyLiked
       });
     });
+    // Similar lesson
+    app.get('/lessons/similar', async (req, res) => {
+      const { category, emotionalTone, lessonId } = req.query;
+
+      if (!category && !emotionalTone) {
+        return res.send([]);
+      }
+
+      const query = {
+        _id: { $ne: new ObjectId(lessonId) },
+        privacy: 'public',
+        $or: [
+          { category: category },
+          { emotionalTone: emotionalTone }
+        ]
+      };
+
+      const result = await lessonsCollection
+        .find(query)
+        .limit(6)
+        .toArray();
+
+      res.send(result);
+    });
+
     // my-lessons
     app.get('/my-lessons/:email', async (req, res) => {
       const email = req.params.email;
@@ -429,8 +456,6 @@ async function run() {
 
       res.send(result);
     });
-
-
     // get all report lesson
     app.get('/reports', async (req, res) => {
       const result = await reportsCollection.find().toArray();
@@ -465,6 +490,43 @@ async function run() {
 
       res.send({ success: true, message: "Report ignored & removed", result });
     });
+
+    // ------------------------------------------------------------------------------------------
+    // Payments endpoints
+    app.post('/create-checkout-session', async (req, res) => {
+      const paymentInfo = req.body;
+      console.log(paymentInfo);
+
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: "WisdomCell Premium"
+              },
+              unit_amount: paymentInfo?.price *100 ,
+            },
+            quantity: 1,
+          },
+        ],
+        customer_email: paymentInfo?.userEmail,
+        // extra info
+        metadata: {
+          userEmail: paymentInfo?.userEmail,
+          userName: paymentInfo?.userName,
+        },
+        mode: 'payment',
+        // if payment success
+        success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        // if payment cancel
+        cancel_url: `${process.env.CLIENT_DOMAIN}/payment`
+      })
+
+      res.send({
+        url: session.url
+      })
+    })
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
