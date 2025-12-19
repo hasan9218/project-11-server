@@ -54,6 +54,7 @@ async function run() {
     const usersCollection = db.collection('users')
     const favoritesCollection = db.collection('favorites')
     const commentsCollection = db.collection('comments')
+    const reportsCollection = db.collection('reports')
 
     // add lesson
     app.post('/lessons', async (req, res) => {
@@ -338,7 +339,7 @@ async function run() {
       });
     });
     // my favorites
-    app.get('/favorites/:email',verifyJWT, async (req, res) => {
+     app.get('/favorites/:email', verifyJWT, async (req, res) => {
       const email = req.params.email;
       const query = { userEmail: email };
 
@@ -347,15 +348,15 @@ async function run() {
     })
 
     // delete my fav
-    app.delete('/my-favorites/:id',verifyJWT, async (req, res) => {
+    app.delete('/my-favorites/:id', verifyJWT, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
       
       //get lesson id
       const favorite = await favoritesCollection.findOne(query);
       if (!favorite) {
-        return res.status(404).send({ 
-          message: 'Favorite not found' 
+        return res.status(404).send({
+          message: 'Favorite not found'
         });
       }
       const lessonId = favorite.lessonId;
@@ -370,19 +371,100 @@ async function run() {
       res.send(result)
     })
     // comments
-    app.post('/comments', async(req,res)=>{
-      const commentData=req.body;
+    app.post('/comments', async (req, res) => {
+      const commentData = req.body;
 
-      const result= await commentsCollection.insertOne(commentData);
+      const result = await commentsCollection.insertOne(commentData);
       res.send(result);
     })
-     app.get('/comments/:id',async(req,res)=>{
-      const id=req.params.id;
-      const query={lessonId: id}
+     app.get('/comments/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { lessonId: id }
 
-      const result= await commentsCollection.find(query).toArray();
+      const result = await commentsCollection.find(query).toArray();
       res.send(result)
     })
+
+    // -----------------------------------------------------------------------------
+    // Report
+    // add report lesson
+    app.post('/reports', async (req, res) => {
+      const { lessonId, lessonTitle, reporterEmail, reporterName, reason } = req.body;
+
+      if (!lessonId || !reporterEmail || !reporterName || !reason) {
+        return res.status(400).send({ message: "Missing fields" });
+      }
+
+      const query = { lessonId: lessonId };
+      const existing = await reportsCollection.findOne(query);
+
+      const reportEntry = {
+        reporterEmail,
+        reporterName,
+        reason,
+        reportedAt: new Date()
+      };
+
+      if (existing) {
+        // Update existing with $push
+        const updateDoc = {
+          $inc: { totalReports: 1 },
+          $push: { reportReasons: reportEntry }
+        };
+
+        await reportsCollection.updateOne(query, updateDoc);
+
+        return res.send({ message: "Report added to existing lesson" });
+      }
+
+      // Create new reported lesson
+      const newReport = {
+        lessonId,
+        lessonTitle,
+        totalReports: 1,
+        reportReasons: [reportEntry]
+      };
+
+      const result = await reportsCollection.insertOne(newReport);
+
+      res.send(result);
+    });
+
+
+    // get all report lesson
+    app.get('/reports', async (req, res) => {
+      const result = await reportsCollection.find().toArray();
+      res.send(result);
+    });
+    // get 1 report lesson details
+    app.get('/reports/:lessonId', async (req, res) => {
+      const lessonId = req.params.lessonId;
+
+      const result = await reportsCollection.findOne({ lessonId });
+
+      if (!result) return res.send({});
+
+      res.send(result);
+    });
+    // delete report lesson
+    app.delete('/reports/:lessonId', async (req, res) => {
+      const lessonId = req.params.lessonId;
+
+      await lessonsCollection.deleteOne({ _id: new ObjectId(lessonId) });
+
+      const result = await reportsCollection.deleteOne({ lessonId });
+
+      res.send({ success: true, result });
+    });
+
+    // ignore
+    app.patch('/reports/ignore/:lessonId', async (req, res) => {
+      const lessonId = req.params.lessonId;
+
+      const result = await reportsCollection.deleteOne({ lessonId });
+
+      res.send({ success: true, message: "Report ignored & removed", result });
+    });
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
