@@ -53,6 +53,7 @@ async function run() {
     const lessonsCollection = db.collection('lessons')
     const usersCollection = db.collection('users')
     const favoritesCollection = db.collection('favorites')
+    const commentsCollection = db.collection('comments')
 
     // add lesson
     app.post('/lessons', async (req, res) => {
@@ -333,9 +334,41 @@ async function run() {
       res.send({
         success: true,
         favoritesCount: favoritesCount,
-        userFavorited: !existing 
+        userFavorited: !existing
       });
     });
+    // my favorites
+    app.get('/favorites/:email', async (req, res) => {
+      const email = req.params.email;
+      const query = { userEmail: email };
+
+      const result = await favoritesCollection.find(query).toArray();
+      res.send(result);
+    })
+
+    // delete my fav
+    app.delete('/my-favorites/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      
+      //get lesson id
+      const favorite = await favoritesCollection.findOne(query);
+      if (!favorite) {
+        return res.status(404).send({ 
+          message: 'Favorite not found' 
+        });
+      }
+      const lessonId = favorite.lessonId;
+      // delete
+      const result = await favoritesCollection.deleteOne(query);
+      // update lesson
+      await lessonsCollection.updateOne(
+        { _id: new ObjectId(lessonId) },
+        { $inc: { favoritesCount: -1 } }
+      );
+
+      res.send(result)
+    })
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
