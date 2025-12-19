@@ -2,7 +2,6 @@ const express = require('express')
 const cors = require('cors')
 require('dotenv').config()
 const { MongoClient, ServerApiVersion } = require('mongodb')
-//const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 const admin = require('firebase-admin')
@@ -57,6 +56,7 @@ async function run() {
     const favoritesCollection = db.collection('favorites')
     const commentsCollection = db.collection('comments')
     const reportsCollection = db.collection('reports')
+    const paymentsCollection = db.collection('payments')
 
     // add lesson
     app.post('/lessons', async (req, res) => {
@@ -505,7 +505,7 @@ async function run() {
               product_data: {
                 name: "WisdomCell Premium"
               },
-              unit_amount: paymentInfo?.price *100 ,
+              unit_amount: paymentInfo?.price * 100,
             },
             quantity: 1,
           },
@@ -520,13 +520,72 @@ async function run() {
         // if payment success
         success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         // if payment cancel
-        cancel_url: `${process.env.CLIENT_DOMAIN}/payment`
+        cancel_url: `${process.env.CLIENT_DOMAIN}/payment-cancel`
       })
 
       res.send({
         url: session.url
       })
     })
+
+    // payment-success + session id
+    app.post('/payment-success', async (req, res) => {
+      const { sessionId } = req.body;
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+      const transactionId = session.payment_intent;
+      const userEmail = session.metadata.userEmail;
+      const userName = session.metadata.userName;
+
+      // Check if user exists
+      const user = await usersCollection.findOne({ email: userEmail });
+
+      // payment complete or not
+      if (session.payment_status !== 'paid') {
+        return res.status(400).send({ message: "Payment not completed" });
+      }
+
+      // already paid or not
+      const existingPayment = await paymentsCollection.findOne({
+        transactionId
+      });
+
+      if (existingPayment) {
+        return res.send({
+          message: "Payment already processed",
+          transactionId,
+        });
+      }
+
+      // Save payment info
+      const paymentInfo = {
+        transactionId,
+        userEmail,
+        userName,
+        amount: session.amount_total / 100,
+        currency: session.currency,
+        paidAt: new Date(),
+      };
+
+      const paymentResult = await paymentsCollection.insertOne(paymentInfo);
+
+      // Update user to Premium
+      await usersCollection.updateOne(
+        { email: userEmail },
+        {
+          $set: {
+            isPremium: true,
+            premiumSince: new Date(),
+          },
+        }
+      );
+
+      res.send({
+        success: true,
+        transactionId,
+        paymentId: paymentResult.insertedId,
+      });
+    });
     // Send a ping 
     await client.db('admin').command({ ping: 1 })
     console.log(
