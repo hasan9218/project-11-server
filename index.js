@@ -1,9 +1,8 @@
+require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
-require('dotenv').config()
-const { MongoClient, ServerApiVersion } = require('mongodb')
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
 const admin = require('firebase-admin')
 const port = process.env.PORT || 3000
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
@@ -25,22 +24,25 @@ app.use(
 )
 app.use(express.json())
 
-// jwt middlewares
 const verifyJWT = async (req, res, next) => {
-  const token = req?.headers?.authorization?.split(' ')[1]
-  console.log(token)
-  if (!token) return res.status(401).send({ message: 'Unauthorized Access!' })
   try {
+    const authHeader = req.headers?.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).send({ message: 'Unauthorized Access!' })
+    }
+
+    const token = authHeader.split(' ')[1]
     const decoded = await admin.auth().verifyIdToken(token)
     req.tokenEmail = decoded.email
-    console.log(decoded)
     next()
   } catch (err) {
     console.log(err)
-    return res.status(401).send({ message: 'Unauthorized Access!', err })
+    return res.status(401).send({ message: 'Unauthorized Access!' })
   }
 }
-// Create a MongoClient 
+
+
+// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -58,12 +60,25 @@ async function run() {
     const reportsCollection = db.collection('reports')
     const paymentsCollection = db.collection('payments')
 
+    // Role-based middleware
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.tokenEmail;
+      const user = await usersCollection.findOne({ email })
+      if (user?.role !== 'admin') {
+        return res.status(403).send({ message: "Admin only Actions!", role: user?.role })
+      }
+    }
+
+    // ---------------------------------------------------
     // add lesson
     app.post('/lessons', async (req, res) => {
       const lessonData = req.body;
-      lessonData.likes = [];
 
-      // get author's lesson count
+      // manage lesson
+      lessonData.likes = [];
+      lessonData.isFeatured = false;
+      lessonData.isReviewed = false;
+
       const user = await usersCollection.findOne(
         { email: lessonData.authorEmail },
         { projection: { lessonCount: 1 } }
@@ -71,20 +86,106 @@ async function run() {
       const currentCount = user?.lessonCount || 0;
       lessonData.authorLessonCount = currentCount + 1;
 
-      // update lesson count in the userCollection
       const userQuery = { email: lessonData.authorEmail };
       const update = { $inc: { lessonCount: 1 } };
       await usersCollection.updateOne(userQuery, update);
 
       const result = await lessonsCollection.insertOne(lessonData)
       res.send(result);
-    })
+    });
 
-    // get lessons from db
+    // All lesson:
+    // get all lessons with search, filter, sort, pagination
     app.get('/lessons', async (req, res) => {
-      const result = await lessonsCollection.find().toArray();
-      res.send(result);
-    })
+      try {
+        const { limit = 0, skip = 0, category, emotionalTone, sortBy, search, admin, reportedOnly } = req.query;
+
+        const query = {};
+
+        //show ALL lessons (public + private)
+        if (admin !== 'true') {
+          query.privacy = 'public';
+        }
+
+        // Category filter
+        if (category && category !== 'all') {
+          query.category = category;
+        }
+
+        // Emotional tone filter
+        if (emotionalTone && emotionalTone !== 'all') {
+          query.emotionalTone = emotionalTone;
+        }
+
+        // Search by title
+        if (search) {
+          query.title = { $regex: search, $options: 'i' };
+        }
+
+        // Sorting
+        let sortOption = {};
+        if (sortBy === 'newest') {
+          sortOption = { createdAt: -1 };
+        } else if (sortBy === 'mostSaved') {
+          sortOption = { favoritesCount: -1 };
+        } else if (sortBy === 'title') {
+          sortOption = { title: 1 };
+        }
+
+        // Get total count for current query
+        const total = await lessonsCollection.countDocuments(query);
+
+        // Get lessons
+        const result = await lessonsCollection
+          .find(query)
+          .sort(sortOption)
+          .limit(Number(limit))
+          .skip(Number(skip))
+          .toArray();
+
+        // report
+        let finalResult = result;
+        if (reportedOnly === 'true') {
+          const reports = await reportsCollection.find({}).toArray();
+          const reportedLessonIds = reports.map(r => r.lessonId);
+
+          finalResult = result.filter(lesson =>
+            reportedLessonIds.includes(lesson._id.toString())
+          );
+        }
+
+        // ONLY calculate stats when admin requests
+        let stats = null;
+        if (admin === 'true') {
+          // Get ALL lessons for stats
+          const allLessons = await lessonsCollection.find({}).toArray();
+
+          // Get reports for reported count
+          const reports = await reportsCollection.find({}).toArray();
+          const reportedLessonIds = [...new Set(reports.map(r => r.lessonId))]; // Unique lesson IDs
+
+          stats = {
+            total: allLessons.length,
+            public: allLessons.filter(l => l.privacy === 'public').length,
+            private: allLessons.filter(l => l.privacy === 'private').length,
+            reported: reportedLessonIds.length
+          };
+        }
+
+        // Send response
+        res.send({
+          success: true,
+          result: finalResult,
+          total: total,
+          stats
+        });
+
+      } catch (error) {
+        console.error('Error fetching lessons:', error);
+        res.status(500).send({ error: 'Server error' });
+      }
+    });
+
     //Lesson details:  get a single lesson from db
     app.get('/lesson-details/:id', async (req, res) => {
       const id = req.params.id;
@@ -92,9 +193,10 @@ async function run() {
       const result = await lessonsCollection.findOne(query);
       res.send(result);
     })
+
     // Lesson details: like
     app.post('/lesson/:id/like', verifyJWT, async (req, res) => {
-      const Id = req.params.id;
+      const id = req.params.id;
       const userEmail = req.body.userEmail;
 
       const lesson = await lessonsCollection.findOne({ _id: new ObjectId(id) });
@@ -120,7 +222,6 @@ async function run() {
           }
         );
       }
-
       // Get updated count
       const updatedLesson = await lessonsCollection.findOne(
         { _id: new ObjectId(id) },
@@ -128,11 +229,11 @@ async function run() {
       );
 
       res.send({
-        success: true,
         likesCount: updatedLesson.likesCount,
         userLiked: !alreadyLiked
       });
     });
+
     // Similar lesson
     app.get('/lessons/similar', async (req, res) => {
       const { category, emotionalTone, lessonId } = req.query;
@@ -167,17 +268,49 @@ async function run() {
       const result = await lessonsCollection.find(query).toArray();
       res.send(result);
     })
+    // privacy to my-lesson
+    app.patch('/lesson/:id/privacy', async (req, res) => {
+      const { privacy } = req.body;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const update = {
+        $set: { privacy }
+      }
+      const result = await lessonsCollection.updateOne(query, update);
 
+      res.send(result);
+    });
+    //access level my-lesson
+    app.patch('/lesson/:id/access', async (req, res) => {
+      const { accessLevel } = req.body;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const update = {
+        $set: { accessLevel }
+      }
+      const result = await lessonsCollection.updateOne(query, update);
+      res.send(result);
+    });
     // delete my lesson
     app.delete('/my-lesson/:id', async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
 
+      const lesson = await lessonsCollection.findOne(query);
+
+      if (!lesson) {
+        return res.status(404).send({ error: 'Lesson not found' });
+      }
       const result = await lessonsCollection.deleteOne(query);
+
+      await usersCollection.updateOne(
+        { email: lesson.authorEmail },
+        { $inc: { lessonCount: -1 } }
+      );
       res.send(result)
     })
     // update my lesson
-    app.patch('/my-lesson/:id', async (req, res) => {
+    app.patch('/my-lesson/:id', verifyJWT, async (req, res) => {
       const { title, description, category, emotionalTone, privacy, accessLevel, image } = req.body;
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
@@ -202,11 +335,87 @@ async function run() {
       const result = await lessonsCollection.updateOne(query, update)
       res.send(result)
     })
+    
+    app.get('/lessons/featured', async (req, res) => {
+      const featuredLessons = await lessonsCollection.find({
+        isFeatured: true,
+        privacy: 'public'
+      })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.send(featuredLessons);
+    });
+
+
+    // featured status
+    app.patch('/lesson/:id/feature', verifyJWT, verifyAdmin, async (req, res) => {
+      const lessonId = req.params.id;
+      const { isFeatured } = req.body;
+
+      const result = await lessonsCollection.updateOne(
+        { _id: new ObjectId(lessonId) },
+        { $set: { isFeatured: isFeatured } }
+      );
+
+      res.send({
+        success: true,
+        modifiedCount: result.modifiedCount
+      });
+    });
+
+    // reviewed
+    app.patch('/lesson/:id/reviewed', verifyJWT, verifyAdmin, async (req, res) => {
+      const lessonId = req.params.id;
+
+      const result = await lessonsCollection.updateOne(
+        { _id: new ObjectId(lessonId) },
+        {
+          $set: {
+            isReviewed: true,
+            reviewedAt: new Date(),
+          }
+        }
+      );
+
+      res.send({
+        success: true,
+        modifiedCount: result.modifiedCount
+      });
+    });
+
+    // ------------------------------------------------
+    // extra section
+    app.get('/top-contributors', async (req, res) => {
+      const contributors = await usersCollection
+        .find({ role: 'user' })
+        .sort({ lessonCount: -1 }) // most lessons first
+        .limit(3)
+        .project({
+          name: 1,
+          email: 1,
+          image: 1,
+          lessonCount: 1
+        })
+        .toArray();
+
+      res.send(contributors);
+    });
+    // most saved
+    app.get('/most-saved-lessons', async (req, res) => {
+      const result = await lessonsCollection
+        .find({ privacy: 'public' })
+        .sort({ favoritesCount: -1 })
+        .limit(6)
+        .toArray();
+
+      res.send(result);
+    })
 
 
     // ---------------------------------------------
     // Manage-users role: save or update user in db
-    app.post('/user', verifyJWT, async (req, res) => {
+    app.post('/user', async (req, res) => {
       const userData = req.body;
       // add some extra info
       userData.isPremium = false;
@@ -220,17 +429,27 @@ async function run() {
       //find if the user already exist or not
       const alreadyExists = await usersCollection.findOne(query);
 
-
       // if exist--> update
       if (alreadyExists) {
         console.log('updating user info-->')
+
+        // update
         const update = {
           $set: {
-            last_loggedIn: new Date().toISOString
+            last_loggedIn: new Date().toISOString(),
+            update_at: new Date().toISOString(),
           }
         }
-        const result = await usersCollection.updateOne(query, update)
+        // update name and img
+        if (userData.name) {
+          update.$set.name = userData.name;
+        }
+        if (userData.image) {
+          update.$set.image = userData.image;
+        }
 
+
+        const result = await usersCollection.updateOne(query, update)
         return res.send(result)
       }
 
@@ -250,7 +469,7 @@ async function run() {
     })
 
     // delete user: manage user
-    app.delete('/users/:email', async (req, res) => {
+    app.delete('/users/:email', verifyJWT, verifyAdmin, async (req, res) => {
       const email = req.params.email;
       const query = { email }
 
@@ -258,7 +477,7 @@ async function run() {
       res.send(result)
     })
     // update role: manage user
-    app.patch('/update-role', verifyJWT, async (req, res) => {
+    app.patch('/update-role', verifyJWT, verifyAdmin, async (req, res) => {
       const { email, role } = req.body;
       console.log(email, role)
       const update = {
@@ -278,6 +497,7 @@ async function run() {
       })
     })
 
+    // -------------------------------------------------------------
     // Author 
     //  Get author info
     app.get('/author/:email', async (req, res) => {
@@ -313,7 +533,7 @@ async function run() {
 
     // --------------------------------------------------------------------
     // favorites
-    app.post('/lesson/:id/favorite', verifyJWT, async (req, res) => {
+    app.post('/lesson/:id/favorite', async (req, res) => {
 
       const { lessonId, userEmail, title, accessLevel, category, emotionalTone } = req.body;
 
@@ -334,16 +554,16 @@ async function run() {
           { _id: new ObjectId(lessonId) },
           { $inc: { favoritesCount: -1 } }
         );
-      } 
+      }
       else {
         // if not,add
         await favoritesCollection.insertOne({
           lessonId: lessonId,
           userEmail: userEmail,
-          title:title, 
-          accessLevel:accessLevel, 
-          category:category, 
-          emotionalTone:emotionalTone,
+          title: title,
+          accessLevel: accessLevel,
+          category: category,
+          emotionalTone: emotionalTone,
           saved_at: new Date().toISOString()
         });
 
@@ -365,8 +585,9 @@ async function run() {
         userFavorited: !existing
       });
     });
+
     // my favorites
-     app.get('/favorites/:email', verifyJWT, async (req, res) => {
+    app.get('/favorites/:email', async (req, res) => {
       const email = req.params.email;
       const query = { userEmail: email };
 
@@ -375,10 +596,10 @@ async function run() {
     })
 
     // delete my fav
-    app.delete('/my-favorites/:id', verifyJWT, async (req, res) => {
+    app.delete('/my-favorites/:id', async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
-      
+
       //get lesson id
       const favorite = await favoritesCollection.findOne(query);
       if (!favorite) {
@@ -397,6 +618,9 @@ async function run() {
 
       res.send(result)
     })
+
+
+    // ---------------------------------------------------------------------------
     // comments
     app.post('/comments', async (req, res) => {
       const commentData = req.body;
@@ -404,7 +628,8 @@ async function run() {
       const result = await commentsCollection.insertOne(commentData);
       res.send(result);
     })
-     app.get('/comments/:id', async (req, res) => {
+
+    app.get('/comments/:id', async (req, res) => {
       const id = req.params.id;
       const query = { lessonId: id }
 
@@ -457,12 +682,12 @@ async function run() {
       res.send(result);
     });
     // get all report lesson
-    app.get('/reports', async (req, res) => {
+    app.get('/reports', verifyJWT, async (req, res) => {
       const result = await reportsCollection.find().toArray();
       res.send(result);
     });
     // get 1 report lesson details
-    app.get('/reports/:lessonId', async (req, res) => {
+    app.get('/reports/:lessonId', verifyJWT, verifyAdmin, async (req, res) => {
       const lessonId = req.params.lessonId;
 
       const result = await reportsCollection.findOne({ lessonId });
@@ -472,7 +697,7 @@ async function run() {
       res.send(result);
     });
     // delete report lesson
-    app.delete('/reports/:lessonId', async (req, res) => {
+    app.delete('/reports/:lessonId', verifyJWT, verifyAdmin, async (req, res) => {
       const lessonId = req.params.lessonId;
 
       await lessonsCollection.deleteOne({ _id: new ObjectId(lessonId) });
@@ -481,9 +706,8 @@ async function run() {
 
       res.send({ success: true, result });
     });
-
     // ignore
-    app.patch('/reports/ignore/:lessonId', async (req, res) => {
+    app.patch('/reports/ignore/:lessonId', verifyJWT, verifyAdmin, async (req, res) => {
       const lessonId = req.params.lessonId;
 
       const result = await reportsCollection.deleteOne({ lessonId });
@@ -503,7 +727,7 @@ async function run() {
             price_data: {
               currency: 'usd',
               product_data: {
-                name: "WisdomCell Premium"
+                name: "WisdomVault Premium"
               },
               unit_amount: paymentInfo?.price * 100,
             },
@@ -586,19 +810,20 @@ async function run() {
         paymentId: paymentResult.insertedId,
       });
     });
-    // Send a ping 
-    await client.db('admin').command({ ping: 1 })
-    console.log(
-      'Pinged your deployment. You successfully connected to MongoDB!'
-    )
-  } finally {
 
+    // Send a ping to confirm a successful connection
+    // await client.db('admin').command({ ping: 1 })
+    // console.log(
+    //   'Pinged your deployment. You successfully connected to MongoDB!'
+    // );
+  } finally {
+    // Ensures that the client will close when you finish/error
   }
 }
 run().catch(console.dir)
 
 app.get('/', (req, res) => {
-  res.send('WisdomCell Server is Run')
+  res.send('WisdomCell Server is Running....')
 })
 
 app.listen(port, () => {
