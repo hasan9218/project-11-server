@@ -67,6 +67,7 @@ async function run() {
       if (user?.role !== 'admin') {
         return res.status(403).send({ message: "Admin only Actions!", role: user?.role })
       }
+      next();
     }
 
     // ---------------------------------------------------
