@@ -52,6 +52,7 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 })
 async function run() {
   try {
+    await client.connect();
     const db = client.db('lessonsDB')
     const lessonsCollection = db.collection('lessons')
     const usersCollection = db.collection('users')
