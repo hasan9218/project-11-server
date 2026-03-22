@@ -19,7 +19,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.0.0",
     "mongoose": "^9.0.1",
-    "stripe": "^20.1.0",
+    "stripe": "^14.25.0",
     "whatwg-url": "^16.0.1"
   },
   "devDependencies": {
